@@ -1,8 +1,18 @@
 # Claude 런처
 
+**한국어** · [English](README.en.md)
+
 Windows에서 [Claude Code](https://claude.com/claude-code) 세션을 프로젝트별로 모아 보고, 고른 세션을 창 안의 터미널 탭에서 바로 여는 프로그램입니다.
 
-> Anthropic이 만든 공식 프로그램이 아닙니다. 개인이 만든 보조 도구입니다.
+> Anthropic이 만든 공식 프로그램이 아닙니다. 개인이 만든 보조 도구입니다. Windows 전용입니다.
+
+![세션 목록](docs/screenshot-list.png)
+
+Claude Code를 오래 쓰면 세션이 수십 개로 늘어나서 "그때 그 대화"를 다시 찾기 어렵습니다. `claude --resume` 목록을 뒤지는 대신, 프로젝트별로 정리된 목록에서 골라 바로 이어 갈 수 있습니다.
+
+![내장 터미널](docs/screenshot-terminal.png)
+
+<sub>오른쪽 '플랜' 칸은 별도 Claude Code 모드가 있을 때 채워집니다(아래 '알아 둘 점').</sub>
 
 ## 할 수 있는 일
 
@@ -24,7 +34,11 @@ Windows에서 [Claude Code](https://claude.com/claude-code) 세션을 프로젝�
 
 ## 설치
 
-### 방법 1: 한 줄 설치
+### 방법 1: 내려받아 바로 실행
+
+[Releases](https://github.com/mingilee97/claude-cli-launcher/releases/latest)에서 `ClaudeLauncher-*-win-x64.zip`을 받아 압축을 풀고 `ClaudeLauncher.exe`를 실행합니다.
+
+### 방법 2: 한 줄 설치
 
 PowerShell에서:
 
@@ -34,7 +48,7 @@ irm https://raw.githubusercontent.com/mingilee97/claude-cli-launcher/main/instal
 
 `%LOCALAPPDATA%\ClaudeLauncher`에 받아서 빌드하고, 바탕화면과 시작 메뉴에 바로가기를 만듭니다.
 
-### 방법 2: 저장소를 받아서
+### 방법 3: 저장소를 받아서
 
 ```powershell
 git clone https://github.com/mingilee97/claude-cli-launcher.git
@@ -62,7 +76,7 @@ cd claude-cli-launcher
 
 ## 알아 둘 점
 
-- 런처는 **관리자 권한**으로 실행됩니다(`build/app.manifest`). 켤 때 UAC 창이 뜹니다. 관리자 권한 없이 쓰려면 `build/app.manifest`의 `requireAdministrator`를 `asInvoker`로 바꾸고 다시 빌드하세요.
+- 기본은 **일반 권한**으로 실행됩니다. 런처 안 세션에 관리자 권한이 필요하면 `.\install.ps1 -Admin` 또는 `.\build.ps1 -Admin`으로 빌드하세요(켤 때마다 UAC 창이 뜹니다).
 - 런처 폴더 안에 실행 자료(`status\`, `cache\`, `handoff\`, `plans\`, `webdata-admin\`)가 생깁니다. 저장소에는 올라가지 않습니다.
 - 오른쪽 '플랜'·'팀 구성' 칸은 Claude Code 모드(korean-hud)가 보내는 정보로 채워집니다. 이 모드는 이 저장소에 들어 있지 않아서, 없으면 그 칸은 비어 있습니다.
 
@@ -70,7 +84,8 @@ cd claude-cli-launcher
 
 ```powershell
 .\build.ps1          # ClaudeLauncher.exe
-.\build.ps1 -Test    # 시험용 test.exe(관리자 권한 없이 실행)도 함께
+.\build.ps1 -Admin   # 관리자 권한으로 실행되는 판
+.\build.ps1 -Test    # 시험용 test.exe도 함께
 ```
 
 ## 폴더 구성
@@ -79,7 +94,7 @@ cd claude-cli-launcher
 |---|---|
 | `build/Program.cs` | 프로그램 전체(C#, WPF) |
 | `build/main.xaml`, `build/res.xaml` | 화면 |
-| `build/*.manifest` | 실행 권한·DPI 설정 |
+| `build/app.manifest`, `build/app-admin.manifest` | 실행 권한(일반/관리자)·DPI 설정 |
 | `web/` | 내장 터미널(xterm.js)과 D2Coding 글꼴 |
 | `status-tee.js` | Claude Code 상태줄 정보를 런처로 넘기는 스크립트 |
 | `assets/app.ico` | 아이콘 |

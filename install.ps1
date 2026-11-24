@@ -4,7 +4,8 @@
 param(
     [string]$Root,                                              # 프로젝트를 모아 둘 폴더(기본: 바탕화면\Claude)
     [string]$InstallDir = (Join-Path $env:LOCALAPPDATA 'ClaudeLauncher'),  # 한 줄 설치 때 받을 곳
-    [switch]$NoShortcut
+    [switch]$NoShortcut,
+    [switch]$Admin                                              # 관리자 권한으로 실행되게 빌드
 )
 $ErrorActionPreference = 'Stop'
 [Net.ServicePointManager]::SecurityProtocol = [Net.SecurityProtocolType]::Tls12
@@ -22,7 +23,7 @@ if (-not $here -or -not (Test-Path (Join-Path $here 'build\Program.cs'))) {
     New-Item -ItemType Directory -Force $InstallDir | Out-Null
     Copy-Item (Join-Path $src.FullName '*') $InstallDir -Recurse -Force
     Remove-Item $tmp -Recurse -Force
-    $a = @{}; if ($Root) { $a.Root = $Root }; if ($NoShortcut) { $a.NoShortcut = $true }
+    $a = @{}; if ($Root) { $a.Root = $Root }; if ($NoShortcut) { $a.NoShortcut = $true }; if ($Admin) { $a.Admin = $true }
     & (Join-Path $InstallDir 'install.ps1') @a
     return
 }
@@ -40,7 +41,7 @@ if (-not $wv) { $warn += "WebView2 런타임이 없습니다. 설치: winget ins
 if (-not (Test-Cmd 'wt'))     { $warn += "(선택) Windows Terminal이 없으면 '바깥 창에서 열기'가 기본 콘솔로 열립니다." }
 
 # 2) 빌드
-& (Join-Path $here 'build.ps1')
+& (Join-Path $here 'build.ps1') -Admin:$Admin
 
 # 3) 프로젝트 폴더 정하기
 $cfg = Join-Path $here 'launcher-config.json'

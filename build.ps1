@@ -3,7 +3,8 @@
 # WebView2 SDK DLL은 NuGet에서 받아 온다(처음 한 번).
 param(
     [string]$OutDir = $PSScriptRoot,
-    [switch]$Test   # test.exe(관리자 권한 없이 도는 시험용)도 함께 만든다
+    [switch]$Admin,  # 켤 때마다 관리자 권한으로 실행되게 만든다
+    [switch]$Test    # 시험용 test.exe(관리자 권한 없이 실행)도 함께 만든다
 )
 $ErrorActionPreference = 'Stop'
 $root = $PSScriptRoot
@@ -51,5 +52,5 @@ function Invoke-Csc($exe, $manifest) {
     if ($LASTEXITCODE -ne 0) { throw "$exe 빌드 실패" }
     Write-Host "만듦: $(Join-Path $OutDir $exe)"
 }
-Invoke-Csc 'ClaudeLauncher.exe' 'app.manifest'
-if ($Test) { Invoke-Csc 'test.exe' 'test.manifest' }
+Invoke-Csc 'ClaudeLauncher.exe' $(if ($Admin) { 'app-admin.manifest' } else { 'app.manifest' })
+if ($Test) { Invoke-Csc 'test.exe' 'app.manifest' }
