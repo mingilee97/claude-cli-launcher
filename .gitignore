@@ -25,3 +25,4 @@ build/*.png
 build/*.txt
 build/recolor.py
 build/make_icon.py
+/홍보/
