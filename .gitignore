@@ -1,0 +1,27 @@
+# 빌드 결과물
+*.exe
+*.dll
+.deps/
+*.bak*
+
+# 실행하며 생기는 개인 자료
+webdata*/
+status/
+cache/
+handoff/
+plans/
+compact.json
+crash.txt
+pending-move*
+launcher-settings.json
+launcher-config.json
+
+# 개인 아이콘·작업 파일
+/claude.ico
+/claude.png
+/검수/
+build/src/
+build/*.png
+build/*.txt
+build/recolor.py
+build/make_icon.py

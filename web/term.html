@@ -1,0 +1,88 @@
+<!doctype html>
+<html><head><meta charset="utf-8">
+<link rel="stylesheet" href="xterm.css">
+<style>
+  @font-face { font-family: "D2Coding Web"; src: url("D2Coding.ttf") format("truetype"); font-weight: normal; }
+  @font-face { font-family: "D2Coding Web"; src: url("D2CodingBold.ttf") format("truetype"); font-weight: bold; }
+  html, body { margin: 0; height: 100%; background: transparent; overflow: hidden; }
+  .t { position: absolute; inset: 0; visibility: hidden; }
+  .t.on { visibility: visible; }
+  .xterm .xterm-viewport { background: transparent !important; }
+  .xterm-viewport::-webkit-scrollbar { width: 6px; }
+  .xterm-viewport::-webkit-scrollbar-thumb { background: rgba(255,255,255,.22); border-radius: 3px; }
+  .xterm-viewport::-webkit-scrollbar-track { background: transparent; }
+</style></head>
+<body>
+<script src="xterm.js"></script>
+<script src="addon-fit.js"></script>
+<script src="addon-unicode11.js"></script>
+<script>
+const T = (window.Terminal && window.Terminal.Terminal) || window.Terminal;
+const Fit = window.FitAddon.FitAddon, Uni = window.Unicode11Addon.Unicode11Addon;
+const terms = {}; let active = null;
+const post = m => window.chrome.webview.postMessage(m);
+const theme = {
+  background: 'rgba(0,0,0,0)', foreground: '#ECEBE7', cursor: '#E58B66', cursorAccent: '#1A1A1E',
+  selectionBackground: 'rgba(229,139,102,0.35)',
+  black: '#2A2A2E', red: '#F07178', green: '#A8D58A', yellow: '#F2C97D', blue: '#82AAFF', magenta: '#C792EA', cyan: '#89DDFF', white: '#D8D8D4',
+  brightBlack: '#75757C', brightRed: '#FF8A8F', brightGreen: '#C3E88D', brightYellow: '#FFD98E', brightBlue: '#A0C2FF', brightMagenta: '#DDA8FF', brightCyan: '#A6E9FF', brightWhite: '#FFFFFF'
+};
+function fitActive() {
+  if (active == null || !terms[active]) return;
+  const x = terms[active];
+  try { x.fit.fit(); } catch (e) {}
+  if (x.cols !== x.term.cols || x.rows !== x.term.rows) {
+    x.cols = x.term.cols; x.rows = x.term.rows;
+    post({ t: 'r', id: x.id, cols: x.term.cols, rows: x.term.rows });
+  }
+}
+function create(id) {
+  if (terms[id]) return;
+  const el = document.createElement('div'); el.className = 't'; document.body.appendChild(el);
+  const term = new T({ allowTransparency: true, allowProposedApi: true, cursorBlink: true, scrollback: 10000,
+    fontFamily: '"D2Coding Web", "Cascadia Mono", Consolas, monospace', fontSize: 15, lineHeight: 1.1, theme });
+  const fit = new Fit(); term.loadAddon(fit);
+  const uni = new Uni(); term.loadAddon(uni); term.unicode.activeVersion = '11';
+  term.open(el);
+  term.onData(d => post({ t: 'i', id, d }));
+  term.attachCustomKeyEventHandler(e => {
+    if (e.type !== 'keydown') return true;
+    if (e.ctrlKey && !e.shiftKey && e.key === 'c' && term.hasSelection()) {
+      navigator.clipboard.writeText(term.getSelection()); term.clearSelection(); return false;
+    }
+    if (e.ctrlKey && (e.key === 'v' || e.key === 'V')) return false;   // 브라우저 붙여넣기로 처리
+    if (e.ctrlKey && e.shiftKey && e.key === 'C') { if (term.hasSelection()) navigator.clipboard.writeText(term.getSelection()); return false; }
+    return true;
+  });
+  el.addEventListener('contextmenu', ev => {
+    ev.preventDefault();
+    if (term.hasSelection()) { navigator.clipboard.writeText(term.getSelection()); term.clearSelection(); }
+    else navigator.clipboard.readText().then(t => { if (t) term.paste(t); }).catch(() => {});
+  });
+  terms[id] = { id, term, fit, el, cols: 0, rows: 0 };
+}
+function show(id) {
+  active = id;
+  for (const k in terms) terms[k].el.classList.toggle('on', String(k) === String(id));
+  requestAnimationFrame(() => { fitActive(); if (terms[id]) terms[id].term.focus(); });
+}
+function closeT(id) {
+  const x = terms[id]; if (!x) return;
+  x.term.dispose(); x.el.remove(); delete terms[id];
+  if (String(active) === String(id)) active = null;
+}
+window.chrome.webview.addEventListener('message', e => {
+  const m = e.data;
+  if (m.t === 'o') { const x = terms[m.id]; if (x) x.term.write(m.d); }
+  else if (m.t === 'create') create(m.id);
+  else if (m.t === 'show') show(m.id);
+  else if (m.t === 'close') closeT(m.id);
+  else if (m.t === 'focus') { if (active != null && terms[active]) terms[active].term.focus(); }
+});
+new ResizeObserver(() => fitActive()).observe(document.body);
+window.addEventListener('resize', fitActive);
+// 글꼴을 다 읽은 뒤에 준비됐다고 알린다. 먼저 그리면 글자 칸 폭이 어긋난다.
+Promise.all([document.fonts.load('15px "D2Coding Web"'), document.fonts.load('bold 15px "D2Coding Web"')])
+  .catch(() => {}).then(() => post({ t: 'ready' }));
+</script>
+</body></html>
