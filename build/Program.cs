@@ -28,10 +28,15 @@ using WV2 = Microsoft.Web.WebView2.Wpf.WebView2;
 
 public class Session {
     public string Id, FilePath, Cwd, Title, First, Project, Worktree;
+    // Rel: 최상위 폴더에서 본 작업 폴더(최상위는 ""), Wt: 작업본(.claude\worktrees\이름) 이름. 읽을 때마다 Cwd에서 다시 계산한다.
+    public string Rel, Wt;
     public DateTime Time; public long Len; public long Stamp;
 }
 public class Proj {
     public string Name, Dir, Display; public int Count; public DateTime Last;
+    // 폴더 트리: Count는 이 폴더에서 연 세션, Total은 하위 폴더까지 합친 수. Depth는 들여쓰기 단계.
+    public int Total, Depth; public bool HasKids, Open;
+    public string Rel { get { return Name == "." ? "" : Name; } }
 }
 
 static class Scanner {
@@ -166,7 +171,8 @@ static class Scanner {
                     Session s, c;
                     if (cache.TryGetValue(f.FullName, out c) && c.Len == f.Length && c.Stamp == f.LastWriteTimeUtc.Ticks) { s = c; s.Time = f.LastWriteTime; }
                     else { try { s = Read(f); } catch { continue; } cache[f.FullName] = s; dirty = true; }
-                    if (s.Project != null && !string.IsNullOrEmpty(s.Title)) list.Add(s);
+                    Annotate(s);
+                    if (s.Rel != null && !string.IsNullOrEmpty(s.Title)) list.Add(s);
                 }
             }
             if (dirty) SaveCache();
@@ -174,20 +180,74 @@ static class Scanner {
         }
     }
 
-    public static List<Proj> Projects(List<Session> all) {
-        var names = new List<string>(); names.Add(".");
-        try { foreach (var d in new DirectoryInfo(Root).GetDirectories()) if (!d.Name.StartsWith(".")) names.Add(d.Name); } catch { }
-        foreach (var s in all) names.Add(s.Project);
+    static void Annotate(Session s) {
+        s.Rel = null; s.Wt = null;
+        if (s.Cwd == null) return;
+        string cwd = s.Cwd.TrimEnd('\\'), rel;
+        if (cwd.Equals(Root, StringComparison.OrdinalIgnoreCase)) rel = "";
+        else if (cwd.StartsWith(Root + "\\", StringComparison.OrdinalIgnoreCase)) rel = cwd.Substring(Root.Length + 1);
+        else return;
+        // 작업본(.claude\worktrees\이름) 안에서 연 세션은 그 작업본을 가진 폴더의 세션으로 본다.
+        string r2 = "\\" + rel;
+        var m = Regex.Match(r2, @"\\\.claude\\worktrees\\([^\\]+)", RegexOptions.IgnoreCase);
+        if (m.Success) { s.Wt = m.Groups[1].Value; rel = r2.Substring(0, m.Index).TrimStart('\\'); }
+        s.Rel = rel;
+    }
+
+    // 폴더 트리에 넣지 않는 폴더: 숨김, 점으로 시작, 내려받은 꾸러미 폴더.
+    static readonly HashSet<string> SkipDirs = new HashSet<string>(StringComparer.OrdinalIgnoreCase) { "node_modules", "__pycache__", "venv", "$RECYCLE.BIN", "System Volume Information" };
+    static List<string> DiskKids(string rel) {
+        var res = new List<string>();
+        try {
+            foreach (var d in new DirectoryInfo(rel.Length == 0 ? Root : Path.Combine(Root, rel)).GetDirectories()) {
+                if (d.Name.StartsWith(".") || SkipDirs.Contains(d.Name) || (d.Attributes & FileAttributes.Hidden) != 0) continue;
+                res.Add(rel.Length == 0 ? d.Name : rel + "\\" + d.Name);
+            }
+        } catch { }
+        return res;
+    }
+    static string ParentOf(string rel) { int i = rel.LastIndexOf('\\'); return i < 0 ? "" : rel.Substring(0, i); }
+    public static bool Under(string rel, string folder) {
+        if (rel == null) return false;
+        if (folder.Length == 0) return true;
+        return rel.Equals(folder, StringComparison.OrdinalIgnoreCase) || rel.StartsWith(folder + "\\", StringComparison.OrdinalIgnoreCase);
+    }
+
+    // 폴더 트리를 펼친 순서대로 한 줄씩 늘어놓는다. 맨 위는 최상위 폴더, 그 아래 최상위의 하위 폴더들(들여쓰기 0단계).
+    // 들어가는 폴더: 최상위 바로 아래 폴더, 세션을 연 폴더와 그 위 폴더들, 펼친 폴더의 하위 폴더.
+    public static List<Proj> Tree(List<Session> all, ICollection<string> open) {
+        var set = new HashSet<string>(StringComparer.OrdinalIgnoreCase) { "" };
+        foreach (var k in DiskKids("")) set.Add(k);
+        foreach (var s in all) { string r = s.Rel; while (r != null && r.Length > 0 && set.Add(r)) r = ParentOf(r); }
+        foreach (var o in open.Where(x => x.Length > 0).OrderBy(x => x.Count(c => c == '\\')))
+            if (set.Contains(o)) foreach (var k in DiskKids(o)) set.Add(k);
+        var kids = new Dictionary<string, List<string>>(StringComparer.OrdinalIgnoreCase);
+        foreach (var n in set) { if (n.Length == 0) continue; string p = ParentOf(n); List<string> l; if (!kids.TryGetValue(p, out l)) kids[p] = l = new List<string>(); l.Add(n); }
         var res = new List<Proj>();
-        foreach (var n in names.Distinct(StringComparer.OrdinalIgnoreCase)) {
-            var ss = all.Where(x => x.Project.Equals(n, StringComparison.OrdinalIgnoreCase)).ToList();
-            var p = new Proj();
-            p.Name = n; p.Count = ss.Count; p.Last = ss.Count > 0 ? ss.Max(x => x.Time) : DateTime.MinValue;
-            p.Dir = n == "." ? Root : Path.Combine(Root, n);
-            p.Display = n == "." ? "Claude 폴더 (최상위)" : n;
-            res.Add(p);
-        }
-        return res.OrderBy(p => p.Name == "." ? 0 : 1).ThenByDescending(p => p.Last).ThenBy(p => p.Name).ToList();
+        Func<string, int, Proj> make = (n, depth) => {
+            var own = all.Where(x => x.Rel.Equals(n, StringComparison.OrdinalIgnoreCase)).ToList();
+            var sub = all.Where(x => Under(x.Rel, n)).ToList();
+            var p = new Proj { Name = n.Length == 0 ? "." : n, Dir = n.Length == 0 ? Root : Path.Combine(Root, n), Depth = depth };
+            p.Display = n.Length == 0 ? "Claude 폴더 (최상위)" : Path.GetFileName(n);
+            p.Count = own.Count; p.Total = sub.Count;
+            p.Last = sub.Count > 0 ? sub.Max(x => x.Time) : DateTime.MinValue;
+            p.Open = n.Length > 0 && open.Contains(n);
+            return p;
+        };
+        res.Add(make("", 0));
+        Action<string, int> walk = null;
+        walk = (parent, depth) => {
+            List<string> l; if (!kids.TryGetValue(parent, out l)) return;
+            foreach (var p in l.Select(n => make(n, depth)).OrderByDescending(p => p.Last).ThenBy(p => p.Display, StringComparer.CurrentCultureIgnoreCase)) {
+                List<string> kl;
+                p.HasKids = (kids.TryGetValue(p.Rel, out kl) && kl.Count > 0) || (!p.Open && DiskKids(p.Rel).Count > 0);
+                if (!p.HasKids) p.Open = false;
+                res.Add(p);
+                if (p.Open) walk(p.Rel, depth + 1);
+            }
+        };
+        walk("", 0);
+        return res;
     }
 }
 
@@ -303,8 +363,10 @@ class TermTab {
     public readonly StringBuilder Buf = new StringBuilder(); public bool FlushPending;
 }
 
-public class ProjVM { public Proj P { get; set; } public string Display { get; set; } public string Sub { get; set; } public string Glyph { get; set; } }
-public class SessVM { public Session S { get; set; } public string Title { get; set; } public string When { get; set; } public string Sub { get; set; } public string Worktree { get; set; } public Visibility WtVis { get; set; } }
+public class ProjVM { public Proj P { get; set; } public string Display { get; set; } public string Sub { get; set; } public string Glyph { get; set; }
+    public Thickness Indent { get; set; } public string Chev { get; set; } public Visibility ChevVis { get; set; } }
+public class SessVM { public Session S { get; set; } public string Title { get; set; } public string When { get; set; } public string Sub { get; set; } public string Worktree { get; set; } public Visibility WtVis { get; set; }
+    public string Group { get; set; } public string Wt { get; set; } public Visibility WtNameVis { get; set; } public Visibility RowVis { get; set; } }
 
 class Launcher {
     Window w; ListBox lbProj, lbSess; TextBox search, newName; TextBlock hint, txtProj, txtProjSub, status, emptyText, newErr; FrameworkElement empty, newBox; Grid content, termHost;
@@ -313,6 +375,15 @@ class Launcher {
     List<Session> all = new List<Session>(); List<Proj> projects = new List<Proj>(); List<SessVM> shown = new List<SessVM>();
     DateTime lastScan = DateTime.MinValue; bool scanning; string shot; bool demo;
     string pendingProj; bool pendingStart;
+    // 폴더 트리에서 펼친 폴더, 하위 폴더 세션까지 보일지. cache\view.txt 에 남긴다.
+    HashSet<string> openDirs = new HashSet<string>(StringComparer.OrdinalIgnoreCase); bool withSub; Button btnSub; TextBlock txtSub;
+    static string ViewFile { get { return System.IO.Path.Combine(BaseDir, @"cache\view.txt"); } }
+    void LoadView() {
+        try { foreach (var l in File.ReadAllLines(ViewFile, Encoding.UTF8)) { if (l == "#sub=1") withSub = true; else if (l.Length > 0 && !l.StartsWith("#")) openDirs.Add(l); } } catch { }
+    }
+    void SaveView() {
+        try { Directory.CreateDirectory(System.IO.Path.GetDirectoryName(ViewFile)); File.WriteAllLines(ViewFile, new[] { withSub ? "#sub=1" : "#sub=0" }.Concat(openDirs), new UTF8Encoding(false)); } catch { }
+    }
     WV2 web; bool webReady; readonly List<string> queue = new List<string>();
     readonly List<TermTab> tabs = new List<TermTab>(); TermTab activeTab; int nextId = 1;
     readonly JavaScriptSerializer json = new JavaScriptSerializer { MaxJsonLength = int.MaxValue };
@@ -419,7 +490,24 @@ class Launcher {
         };
         lbProj.SelectionChanged += delegate { if (search.Text.Length > 0) search.Text = ""; else ShowSessions(null); };
         lbProj.PreviewMouseLeftButtonUp += delegate { if (activeTab != null) Activate(null); };
-        lbProj.PreviewKeyDown += (s, e) => { if (e.Key == Key.Enter || e.Key == Key.Right) { Activate(null); FocusSess(); e.Handled = true; } };
+        lbProj.PreviewKeyDown += (s, e) => {
+            var vm = lbProj.SelectedItem as ProjVM; var p = vm == null ? null : vm.P;
+            if (e.Key == Key.Right && p != null && p.HasKids && !p.Open) { ToggleDir(p, true); e.Handled = true; }
+            else if (e.Key == Key.Left && p != null && p.Open) { ToggleDir(p, false); e.Handled = true; }
+            else if (e.Key == Key.Left && p != null && p.Rel.Length > 0) { SelectDir(p.Rel.Contains("\\") ? p.Rel.Substring(0, p.Rel.LastIndexOf('\\')) : "."); e.Handled = true; }
+            else if (e.Key == Key.Enter || e.Key == Key.Right) { Activate(null); FocusSess(); e.Handled = true; }
+        };
+        // 폴더 앞 꺾쇠를 누르면 펼치고 접는다. 폴더 줄을 두 번 눌러도 된다.
+        lbProj.PreviewMouseLeftButtonDown += (s, e) => {
+            var fe = e.OriginalSource as FrameworkElement;
+            var c = ItemsControl.ContainerFromElement(lbProj, e.OriginalSource as DependencyObject) as ListBoxItem;
+            var vm = c == null ? null : c.DataContext as ProjVM;
+            if (vm == null || !vm.P.HasKids) return;
+            if ((fe != null && "chev".Equals(fe.Tag)) || e.ClickCount == 2) { ToggleDir(vm.P, !vm.P.Open); e.Handled = true; }
+        };
+        btnSub = F<Button>("BtnSub"); txtSub = F<TextBlock>("TxtSub");
+        btnSub.Click += delegate { withSub = !withSub; SaveView(); ShowSessions(null); };
+        LoadView();
         lbSess.SelectionChanged += delegate { UpdateButtons(); };
         lbSess.PreviewKeyDown += (s, e) => {
             if (e.Key == Key.Enter) { OpenSelected(); e.Handled = true; }
@@ -492,6 +580,62 @@ class Launcher {
     Proj CurProj() { var v = lbProj.SelectedItem as ProjVM; return v == null ? null : v.P; }
     Session CurSess() { var v = lbSess.SelectedItem as SessVM; return v == null ? null : v.S; }
 
+    public void PreSelect(string name) { pendingProj = name; }
+    void ToggleDir(Proj p, bool open) {
+        if (p == null || p.Rel.Length == 0) return;
+        if (open) openDirs.Add(p.Rel); else openDirs.Remove(p.Rel);
+        SaveView();
+        BindTree(p.Name, null);
+    }
+    void SelectDir(string name) {
+        int k = projects.FindIndex(x => x.Name.Equals(name, StringComparison.OrdinalIgnoreCase));
+        if (k >= 0) { lbProj.SelectedIndex = k; lbProj.ScrollIntoView(lbProj.SelectedItem); FocusList(lbProj); }
+    }
+    // 트리를 다시 그린다. 고른 폴더가 접힌 폴더 안에 있으면 위 폴더를 펼친다.
+    void BindTree(string keepProj, string keepSess) {
+        if (keepProj != null && keepProj != ".") {
+            string r = keepProj; int i;
+            while ((i = r.LastIndexOf('\\')) > 0) { r = r.Substring(0, i); openDirs.Add(r); }
+        }
+        projects = Scanner.Tree(all, openDirs);
+        var vms = projects.Select(p => new ProjVM { P = p, Display = p.Display,
+            Glyph = p.Name == "." ? "\xE80F" : (p.Open ? "\xE838" : "\xE8B7"),
+            Indent = new Thickness(p.Depth * 16, 0, 0, 0),
+            Chev = p.Open ? "\xE70D" : "\xE76C",
+            ChevVis = p.HasKids ? Visibility.Visible : Visibility.Hidden,
+            Sub = DirSub(p) }).ToList();
+        lbProj.ItemsSource = vms;
+        int k = keepProj == null ? -1 : projects.FindIndex(p => p.Name.Equals(keepProj, StringComparison.OrdinalIgnoreCase));
+        if (k < 0) k = projects.FindIndex(p => p.Total > 0);
+        lbProj.SelectedIndex = k >= 0 ? k : (projects.Count > 0 ? 0 : -1);
+        if (lbProj.SelectedItem != null) lbProj.ScrollIntoView(lbProj.SelectedItem);
+        ShowSessions(keepSess);
+    }
+    static string DirSub(Proj p) {
+        if (p.Total == 0) return "세션 없음";
+        string w = " · " + When(p.Last);
+        if (p.Count == p.Total) return "세션 " + p.Count + "개" + w;
+        if (p.Count == 0) return "하위에 " + p.Total + "개" + w;
+        return "세션 " + p.Count + "개 (+" + (p.Total - p.Count) + ")" + w;
+    }
+    static readonly System.Globalization.CultureInfo Ko = new System.Globalization.CultureInfo("ko-KR");
+    static string DayGroup(DateTime t) {
+        var today = DateTime.Today;
+        string d = t.Year == today.Year ? t.ToString("M월 d일 (ddd)", Ko) : t.ToString("yyyy년 M월 d일 (ddd)", Ko);
+        if (t.Date == today) return "오늘  ·  " + d;
+        if (t.Date == today.AddDays(-1)) return "어제  ·  " + d;
+        return d;
+    }
+    // 목록 둘째 줄: 이어 받은 세션이 앞에 붙이는 긴 안내 문구는 걷어 내고 내용만 보인다.
+    static string CleanPreview(string s) {
+        if (s == null) return "";
+        s = Regex.Replace(s, @"^\s*Background \(from the session that started this one\):\s*", "");
+        var m = Regex.Match(s, @"^이전 세션에서 넘겨받은 인계 기록입니다:\s*(\S+?\.md)");
+        if (m.Success) return "↪ 인계 받아 시작  ·  " + System.IO.Path.GetFileName(m.Groups[1].Value);
+        return s;
+    }
+    static string ShortWt(string wt) { return wt == null ? null : Regex.Replace(wt, @"-[0-9a-f]{6,}$", ""); }
+
     void FocusList(ListBox lb) {
         if (lb.Items.Count == 0) { lb.Focus(); return; }
         if (lb.SelectedIndex < 0) lb.SelectedIndex = 0;
@@ -512,22 +656,38 @@ class Launcher {
         var p = CurProj();
         if (keepId == null) { var c = CurSess(); if (c != null) keepId = c.Id; }
         string q = search.Text.Trim();
-        var list = p == null ? new List<Session>() : all.Where(s => s.Project.Equals(p.Name, StringComparison.OrdinalIgnoreCase))
+        string sel = p == null ? null : p.Rel;
+        Func<Session, bool> inDir = s => sel != null && (withSub ? Scanner.Under(s.Rel, sel) : s.Rel.Equals(sel, StringComparison.OrdinalIgnoreCase));
+        var list = p == null ? new List<Session>() : all.Where(inDir)
             .Where(s => q.Length == 0 || (s.Title ?? "").IndexOf(q, StringComparison.OrdinalIgnoreCase) >= 0
                        || (s.First ?? "").IndexOf(q, StringComparison.OrdinalIgnoreCase) >= 0
-                       || (s.Worktree ?? "").IndexOf(q, StringComparison.OrdinalIgnoreCase) >= 0)
+                       || (s.Rel ?? "").IndexOf(q, StringComparison.OrdinalIgnoreCase) >= 0
+                       || (s.Wt ?? "").IndexOf(q, StringComparison.OrdinalIgnoreCase) >= 0)
             .OrderByDescending(s => s.Time).ToList();
-        shown = list.Select(s => new SessVM { S = s, Title = s.Title, When = When(s.Time),
-            Sub = s.First == null || s.First == s.Title ? "" : OneLine(s.First, 300),
-            Worktree = s.Worktree, WtVis = s.Worktree == null ? Visibility.Collapsed : Visibility.Visible }).ToList();
-        lbSess.ItemsSource = shown;
+        shown = list.Select(s => {
+            string subDir = sel == null || s.Rel.Length <= sel.Length ? "" : s.Rel.Substring(sel.Length).TrimStart('\\');
+            string wt = ShortWt(s.Wt);
+            string prev = s.First == null || s.First == s.Title ? "" : OneLine(CleanPreview(s.First), 300);
+            return new SessVM { S = s, Title = s.Title, When = s.Time.ToString("HH:mm"), Group = DayGroup(s.Time), Sub = prev,
+                Worktree = subDir, WtVis = subDir.Length == 0 ? Visibility.Collapsed : Visibility.Visible,
+                Wt = wt == null ? null : "작업본 " + wt, WtNameVis = wt == null ? Visibility.Collapsed : Visibility.Visible,
+                RowVis = subDir.Length == 0 && wt == null && prev.Length == 0 ? Visibility.Collapsed : Visibility.Visible };
+        }).ToList();
+        var view = new System.Windows.Data.ListCollectionView(shown);
+        view.GroupDescriptions.Add(new System.Windows.Data.PropertyGroupDescription("Group"));
+        lbSess.ItemsSource = view;
         int k = keepId == null ? -1 : shown.FindIndex(x => x.S.Id == keepId);
         lbSess.SelectedIndex = k >= 0 ? k : (shown.Count > 0 ? 0 : -1);
         if (p != null) {
             txtProj.Text = p.Display;
-            int total = all.Count(s => s.Project.Equals(p.Name, StringComparison.OrdinalIgnoreCase));
+            int total = all.Count(inDir);
+            int own = all.Count(s => s.Rel.Equals(sel, StringComparison.OrdinalIgnoreCase)), deep = all.Count(s => Scanner.Under(s.Rel, sel));
             txtProjSub.Text = p.Dir + "   ·   " + (q.Length > 0 ? ("검색 결과 " + shown.Count + "개 / 전체 " + total + "개") : ("세션 " + total + "개"));
-        } else { txtProj.Text = ""; txtProjSub.Text = ""; }
+            btnSub.Visibility = deep > own ? Visibility.Visible : Visibility.Collapsed;
+            txtSub.Inlines.Clear();
+            txtSub.Inlines.Add(new Run(withSub ? "\xE73A" : "\xE739") { FontFamily = (FontFamily)R("Icons"), FontSize = 12, BaselineAlignment = BaselineAlignment.Center });
+            txtSub.Inlines.Add(new Run("  하위 폴더 세션도 보기 (" + (deep - own) + ")"));
+        } else { txtProj.Text = ""; txtProjSub.Text = ""; btnSub.Visibility = Visibility.Collapsed; }
         bool none = shown.Count == 0;
         emptyText.Text = q.Length > 0 ? "검색 결과가 없습니다." : "아직 세션이 없습니다.\n아래 '새 세션'으로 시작해 보세요.";
         empty.Visibility = none ? Visibility.Visible : Visibility.Collapsed;
@@ -541,21 +701,12 @@ class Launcher {
         status.Text = "세션 목록을 읽는 중…";
         ThreadPool.QueueUserWorkItem(delegate {
             List<Session> list; try { list = Scanner.ScanAll(); } catch { list = new List<Session>(); }
-            var projs = Scanner.Projects(list);
             w.Dispatcher.BeginInvoke((Action)delegate {
                 var cp = CurProj(); string keepProj = pendingProj ?? (cp != null ? cp.Name : null);
                 var cs = CurSess(); string keepSess = cs != null ? cs.Id : null;
-                all = list; projects = projs;
-                var vms = projects.Select(p => new ProjVM { P = p, Display = p.Display,
-                    Glyph = p.Name == "." ? "\xE80F" : "\xE8B7",
-                    Sub = p.Count > 0 ? ("세션 " + p.Count + "개  ·  " + When(p.Last)) : "아직 세션 없음" }).ToList();
-                lbProj.ItemsSource = vms;
-                int k = keepProj == null ? -1 : projects.FindIndex(p => p.Name.Equals(keepProj, StringComparison.OrdinalIgnoreCase));
-                if (k < 0) k = projects.FindIndex(p => p.Count > 0);
-                lbProj.SelectedIndex = k >= 0 ? k : (projects.Count > 0 ? 0 : -1);
-                if (lbProj.SelectedItem != null) lbProj.ScrollIntoView(lbProj.SelectedItem);
-                ShowSessions(keepSess);
-                status.Text = "프로젝트 " + projects.Count + "개  ·  세션 " + all.Count + "개  ·  " + DateTime.Now.ToString("HH:mm") + " 기준";
+                all = list;
+                BindTree(keepProj, keepSess);
+                status.Text = "프로젝트 " + projects.Count(p => p.Depth == 0 && p.Name != ".") + "개  ·  세션 " + all.Count + "개  ·  " + DateTime.Now.ToString("HH:mm") + " 기준";
                 scanning = false; lastScan = DateTime.Now;
                 if (pendingProj != null) {
                     pendingProj = null;
@@ -670,7 +821,7 @@ class Launcher {
         if (web == null) { LaunchExternalCmd(dir, cmd, title); return; }
         var tab = new TermTab { Id = nextId++, Title = title ?? "Claude", Dir = dir, Cmd = cmd, SessionId = sessionId };
         tab.Key = Process.GetCurrentProcess().Id + "-" + tab.Id;
-        tab.UltraPending = launchUltra;
+        tab.UltraPending = launchUltra || UltraRemembered(sessionId);
         tabs.Add(tab);
         Post(new { t = "create", id = tab.Id });
         Activate(tab);
@@ -919,7 +1070,7 @@ class Launcher {
         t.St = ReadJson(StatusPath(t.Key + ".json"), ref t.StM, t.St);
         t.Pane = ReadJson(StatusPath(t.Key + "-pane.json"), ref t.PaneM, t.Pane);
         // 울트라코드로 시작을 골랐으면 Claude가 처음 응답 준비를 마친 뒤(첫 상태 정보가 온 뒤) 켠다.
-        if (t.UltraPending && t.St != null && t.Pty != null && !t.Exited) { t.UltraPending = false; t.Ultra = true; t.UltraSetAt = DateTime.Now; TypeLine(t, "/effort ultracode"); }
+        if (t.UltraPending && t.St != null && t.Pty != null && !t.Exited) { t.UltraPending = false; t.Ultra = true; t.UltraSetAt = DateTime.Now; TypeLine(t, "/effort ultracode"); RememberUltra(t); }
         // 사용자가 직접 /effort ultracode 를 쳐도 모드가 알려 준다. 버튼으로 바꾼 직후 몇 초는 모드가 따라올 때까지 기다린다.
         foreach (var tt in tabs) ScanUltra(tt);
         UpdateChips();
@@ -1130,6 +1281,22 @@ class Launcher {
     // ---------- Ultracode 표시 ----------
     // 켜짐·꺼짐은 세션 기록에 남는 "/effort ultracode"의 답(Ultracode on / Ultracode off)으로 안다. 직접 입력해도 잡힌다.
     // 세션을 이어 열면 Ultracode는 꺼진 채 시작하므로, 처음 볼 때는 지난 기록을 읽지 않고 그 뒤에 새로 쌓인 것만 본다.
+    static readonly Regex RxUltra = new Regex(@"""(?:content|text)"":""<local-command-stdout>\s*Ultracode (on|off)\b");
+    // 세션마다 Ultracode를 켜 두었는지 기억한다(cache\ultra.txt). Ultracode는 "이 세션만" 켜져서 세션을 다시 열면 꺼지므로, 다시 열 때 런처가 다시 켠다.
+    static HashSet<string> ultraMem;
+    static string UltraFile { get { return System.IO.Path.Combine(BaseDir, @"cache\ultra.txt"); } }
+    static bool UltraRemembered(string sid) {
+        if (ultraMem == null) { ultraMem = new HashSet<string>(StringComparer.OrdinalIgnoreCase); try { foreach (var l in File.ReadAllLines(UltraFile)) if (l.Trim().Length > 0) ultraMem.Add(l.Trim()); } catch { } }
+        return sid != null && ultraMem.Contains(sid);
+    }
+    void RememberUltra(TermTab t) {
+        string sid = Str(t.St, "session_id") ?? t.SessionId;
+        if (sid == null) return;
+        UltraRemembered(null);
+        bool changed = t.Ultra ? ultraMem.Add(sid) : ultraMem.Remove(sid);
+        if (!changed) return;
+        try { Directory.CreateDirectory(System.IO.Path.GetDirectoryName(UltraFile)); File.WriteAllLines(UltraFile, ultraMem); } catch { }
+    }
     void ScanUltra(TermTab t) {
         string tp = Str(t.St, "transcript_path");
         if (string.IsNullOrEmpty(tp)) return;
@@ -1140,8 +1307,9 @@ class Launcher {
                 string s;
                 using (var fs = new FileStream(tp, FileMode.Open, FileAccess.Read, FileShare.ReadWrite | FileShare.Delete)) { fs.Seek(t.UltraScan, SeekOrigin.Begin); var ms = new MemoryStream(); fs.CopyTo(ms); s = Encoding.UTF8.GetString(ms.ToArray()); }
                 t.UltraScan = fi.Length;
-                int on = s.LastIndexOf("Ultracode on"), off = s.LastIndexOf("Ultracode off");
-                if (on >= 0 || off >= 0) { t.Ultra = on > off; t.UltraSetAt = DateTime.Now; }
+                // "/effort ultracode"의 실제 답(local-command-stdout)만 본다. 대화나 도구 출력에 그 낱말이 섞여도 바뀌지 않게 한다.
+                var ms2 = RxUltra.Matches(s);
+                if (ms2.Count > 0) { t.Ultra = ms2[ms2.Count - 1].Groups[1].Value == "on"; t.UltraSetAt = DateTime.Now; RememberUltra(t); }
             } else if (fi.Length < t.UltraScan) t.UltraScan = fi.Length;
         } catch { }
         // 모드가 입력창 위에 표시를 그리도록 표시 파일을 둔다.
@@ -1539,6 +1707,7 @@ class Launcher {
         if (t.UltraPending) { t.UltraPending = false; UpdateChips(); return; }
         t.Ultra = !t.Ultra; t.UltraSetAt = DateTime.Now;
         TypeLine(t, t.Ultra ? "/effort ultracode" : "/effort ultracode off");
+        RememberUltra(t);
         status.Text = t.Ultra ? "Ultracode를 켭니다 (이 세션만)" : "Ultracode를 끕니다";
         UpdateChips();
         if (web != null) { web.Focus(); Post(new { t = "focus" }); }
@@ -1870,6 +2039,7 @@ static class App {
             app.Resources = (ResourceDictionary)Load("res.xaml");
             var w = (Window)Load("main.xaml");
             var l = new Launcher(w, shot, demo);
+            int pji = Array.IndexOf(args, "--proj"); if (pji >= 0 && pji + 1 < args.Length) l.PreSelect(args[pji + 1]);
             int nwi = Array.IndexOf(args, "--width"); if (nwi >= 0 && nwi + 1 < args.Length) w.Width = double.Parse(args[nwi + 1]);
             w.Loaded += delegate {
                 l.Rescan(); l.InitWeb();

@@ -93,12 +93,13 @@
             <ListBox x:Name="LbProj" Padding="0,0,0,8">
               <ListBox.ItemTemplate>
                 <DataTemplate>
-                  <StackPanel>
+                  <StackPanel Margin="{Binding Indent}">
                     <StackPanel Orientation="Horizontal">
-                      <TextBlock Text="{Binding Glyph}" FontFamily="{DynamicResource Icons}" FontSize="13" Foreground="{DynamicResource Dim}" VerticalAlignment="Center" Margin="0,1,10,0"/>
+                      <TextBlock Tag="chev" Text="{Binding Chev}" Visibility="{Binding ChevVis}" FontFamily="{DynamicResource Icons}" FontSize="9" Width="18" Height="18" TextAlignment="Center" Padding="0,4,0,0" Foreground="{DynamicResource Dim}" Background="Transparent" Cursor="Hand" VerticalAlignment="Center" Margin="-4,0,2,0"/>
+                      <TextBlock Text="{Binding Glyph}" FontFamily="{DynamicResource Icons}" FontSize="13" Foreground="{DynamicResource Dim}" VerticalAlignment="Center" Margin="0,1,9,0"/>
                       <TextBlock Text="{Binding Display}" FontSize="14" FontWeight="SemiBold" TextTrimming="CharacterEllipsis"/>
                     </StackPanel>
-                    <TextBlock Text="{Binding Sub}" FontSize="12" Foreground="{DynamicResource Faint}" Margin="23,3,0,0" TextTrimming="CharacterEllipsis"/>
+                    <TextBlock Text="{Binding Sub}" FontSize="12" Foreground="{DynamicResource Faint}" Margin="38,3,0,0" TextTrimming="CharacterEllipsis"/>
                   </StackPanel>
                 </DataTemplate>
               </ListBox.ItemTemplate>
@@ -134,10 +135,14 @@
           </Border>
           <DockPanel x:Name="ListPane">
           <Grid DockPanel.Dock="Top" Margin="4,2,0,14">
+            <Grid.ColumnDefinitions><ColumnDefinition Width="*"/><ColumnDefinition Width="Auto"/></Grid.ColumnDefinitions>
             <StackPanel VerticalAlignment="Center">
               <TextBlock x:Name="TxtProj" Text="" FontSize="22" FontWeight="SemiBold" TextTrimming="CharacterEllipsis"/>
               <TextBlock x:Name="TxtProjSub" Text="" FontSize="12" Foreground="{DynamicResource Faint}" Margin="1,3,0,0" TextTrimming="CharacterEllipsis"/>
             </StackPanel>
+            <Button x:Name="BtnSub" Grid.Column="1" Style="{DynamicResource GlassBtn}" VerticalAlignment="Bottom" Margin="12,0,0,0" Padding="12,6" Visibility="Collapsed" ToolTip="이 폴더 아래 하위 폴더에서 연 세션도 함께 봅니다">
+              <TextBlock x:Name="TxtSub" FontSize="12"/>
+            </Button>
           </Grid>
           <Border DockPanel.Dock="Top" CornerRadius="14" Background="{DynamicResource GlassFill}" BorderBrush="{DynamicResource GlassEdge}" BorderThickness="1" Height="44" Margin="0,0,0,12">
             <Grid Margin="16,0,10,0">
@@ -150,7 +155,20 @@
           </Border>
           <Border CornerRadius="18" Background="{DynamicResource GlassFill}" BorderBrush="{DynamicResource GlassEdge}" BorderThickness="1">
             <Grid>
-              <ListBox x:Name="LbSess" Padding="0,8,0,8">
+              <ListBox x:Name="LbSess" Padding="0,2,0,8" VirtualizingPanel.IsVirtualizingWhenGrouping="True">
+                <ListBox.GroupStyle>
+                  <GroupStyle>
+                    <GroupStyle.HeaderTemplate>
+                      <DataTemplate>
+                        <DockPanel Margin="20,16,20,6">
+                          <TextBlock DockPanel.Dock="Left" Text="{Binding Name}" FontSize="12.5" FontWeight="SemiBold" Foreground="{DynamicResource AccentBrush}" VerticalAlignment="Center"/>
+                          <TextBlock DockPanel.Dock="Left" Text="{Binding ItemCount, StringFormat=' · {0}개'}" FontSize="12" Foreground="{DynamicResource Faint}" Margin="4,0,0,0" VerticalAlignment="Center"/>
+                          <Border Height="1" Background="#1AFFFFFF" Margin="12,1,0,0" VerticalAlignment="Center"/>
+                        </DockPanel>
+                      </DataTemplate>
+                    </GroupStyle.HeaderTemplate>
+                  </GroupStyle>
+                </ListBox.GroupStyle>
                 <ListBox.ContextMenu>
                   <ContextMenu>
                     <MenuItem x:Name="MiOpen" Header="이어서 열기" Tag="&#xE768;"/>
@@ -166,14 +184,17 @@
                       <Grid.RowDefinitions><RowDefinition/><RowDefinition/></Grid.RowDefinitions>
                       <TextBlock Text="{Binding Title}" FontSize="14" FontWeight="SemiBold" TextTrimming="CharacterEllipsis" Margin="0,0,16,0"/>
                       <TextBlock Grid.Column="1" Text="{Binding When}" FontSize="12" Foreground="{DynamicResource Faint}" VerticalAlignment="Center"/>
-                      <StackPanel Grid.Row="1" Grid.ColumnSpan="2" Orientation="Horizontal" Margin="0,6,0,0">
+                      <StackPanel Grid.Row="1" Grid.ColumnSpan="2" Orientation="Horizontal" Margin="0,6,0,0" Visibility="{Binding RowVis}">
                         <Border CornerRadius="6" Background="#26E58B66" BorderBrush="#40E58B66" BorderThickness="1" Padding="7,1" Margin="0,0,8,0" Visibility="{Binding WtVis}" VerticalAlignment="Center">
                           <StackPanel Orientation="Horizontal">
                             <TextBlock Text="&#xE8B7;" FontFamily="{DynamicResource Icons}" FontSize="10" Foreground="{DynamicResource AccentBrush}" VerticalAlignment="Center"/>
                             <TextBlock Text="{Binding Worktree}" FontSize="11" Foreground="{DynamicResource AccentBrush}" Margin="5,0,0,0" VerticalAlignment="Center"/>
                           </StackPanel>
                         </Border>
-                        <TextBlock Text="{Binding Sub}" FontSize="12" Foreground="{DynamicResource Dim}" TextTrimming="CharacterEllipsis" VerticalAlignment="Center" MaxWidth="2000"/>
+                        <Border CornerRadius="6" Background="#14FFFFFF" Padding="7,1" Margin="0,0,8,0" Visibility="{Binding WtNameVis}" VerticalAlignment="Center">
+                          <TextBlock Text="{Binding Wt}" FontSize="11" Foreground="{DynamicResource Dim}" VerticalAlignment="Center"/>
+                        </Border>
+                        <TextBlock Text="{Binding Sub}" FontSize="12" Foreground="{DynamicResource Faint}" TextTrimming="CharacterEllipsis" VerticalAlignment="Center" MaxWidth="2000"/>
                       </StackPanel>
                     </Grid>
                   </DataTemplate>
