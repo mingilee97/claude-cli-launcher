@@ -1945,13 +1945,17 @@ class Launcher {
             panelBody.Children.Add(new TextBlock { Text = "Claude가 여러 단계로 된 작업을 시작하면 여기에 플랜이 보입니다.\n사용자 요구와 단계별 진행이 계층으로 나옵니다.", FontSize = 12, Foreground = (Brush)R("Faint"), TextWrapping = TextWrapping.Wrap, LineHeight = 19 });
             return;
         }
-        string need = null;
+        string need = null; var needs = new List<string>(); bool inNeed = false;
         var steps = new List<Tuple<int, string, string, string, string>>(); // 깊이, 번호, 상태, 제목, 요약
         foreach (var raw in text.Replace("\r", "").Split('\n')) {
             var line = raw.TrimEnd();
             if (line.Trim().Length == 0) continue;
             var mn = Regex.Match(line, @"^\s*(?:[-*]\s*)?(?:요구|사용자 요구|핵심 플랜)\s*[:：]\s*(.+)$");
-            if (mn.Success && need == null) { need = mn.Groups[1].Value.Trim(); continue; }
+            if (mn.Success && need == null) { need = mn.Groups[1].Value.Trim(); inNeed = true; continue; }
+            // 요구 아래 "  - 세부 요구" 줄은 요구의 하위 항목으로 모은다.
+            var mb = Regex.Match(line, @"^\s*[-*•]\s+(.+)$");
+            if (inNeed && mb.Success) { needs.Add(mb.Groups[1].Value.Trim()); continue; }
+            inNeed = false;
             var ms = Regex.Match(line, @"^(\s*)(?:[-*]\s*)?(\d+(?:\.\d+)*)\.?\s*(?:\[(완료|진행|대기|진행 중|끝)\]|\((완료|진행|대기|진행 중|끝)\))?\s*(.+)$");
             if (!ms.Success) continue;
             string num = ms.Groups[2].Value;
@@ -1971,8 +1975,22 @@ class Launcher {
         if (need != null) {
             var card = new Border { CornerRadius = new CornerRadius(12), Background = B("#14FFFFFF"), BorderBrush = B("#22FFFFFF"), BorderThickness = new Thickness(1), Padding = new Thickness(13, 10, 13, 11), Margin = new Thickness(0, 0, 0, 12) };
             var sp = new StackPanel(); card.Child = sp;
-            sp.Children.Add(T("사용자 요구", 11, (Brush)R("Faint")));
-            sp.Children.Add(new TextBlock { Text = need, FontSize = 12.5, Foreground = (Brush)R("Ink"), TextWrapping = TextWrapping.Wrap, Margin = new Thickness(0, 4, 0, 0), LineHeight = 19 });
+            sp.Children.Add(new TextBlock { Text = "사용자 요구", FontSize = 11, FontWeight = FontWeights.Bold, Foreground = (Brush)R("AccentBrush") });
+            // 세부 항목이 없고 한 줄이 길면, 쉼표·그리고로 나눠 항목으로 보여 준다.
+            var items = new List<string>(needs);
+            string head = need;
+            if (items.Count == 0 && need.Length > 30) {
+                var parts = Regex.Split(need, @"\s*(?:,|，|;| 그리고 )\s*").Select(x => x.Trim()).Where(x => x.Length > 0).ToList();
+                if (parts.Count >= 2) { head = null; items = parts; }
+            }
+            if (head != null) { var hb = new TextBlock { FontSize = 13, FontWeight = FontWeights.Bold, Foreground = (Brush)R("Ink"), TextWrapping = TextWrapping.Wrap, Margin = new Thickness(0, 5, 0, 0), LineHeight = 19 }; Rich(hb, head, (Brush)R("Ink")); sp.Children.Add(hb); }
+            foreach (var it in items) {
+                var row = new Grid { Margin = new Thickness(2, 6, 0, 0) };
+                row.ColumnDefinitions.Add(new ColumnDefinition { Width = new GridLength(16) }); row.ColumnDefinitions.Add(new ColumnDefinition());
+                row.Children.Add(new TextBlock { Text = "•", FontSize = 13, FontWeight = FontWeights.Bold, Foreground = (Brush)R("AccentBrush"), Margin = new Thickness(0, -1, 0, 0) });
+                var tb = new TextBlock { FontSize = 12.5, Foreground = (Brush)R("Ink"), TextWrapping = TextWrapping.Wrap, LineHeight = 18 }; Rich(tb, it, (Brush)R("Ink"));
+                Grid.SetColumn(tb, 1); row.Children.Add(tb); sp.Children.Add(row);
+            }
             panelBody.Children.Add(card);
         }
         if (top > 0) { Meter("진행 (마친 단계)", fin * 100.0 / top, null, ModelBrush(Str(t.St, "model", "id"))); }
@@ -1988,13 +2006,22 @@ class Launcher {
         var sp = new StackPanel(); Grid.SetColumn(sp, 1); g.Children.Add(sp);
         var tb = new TextBlock { FontSize = depth == 0 ? 12.5 : 12, TextWrapping = TextWrapping.Wrap, LineHeight = 18 };
         tb.Inlines.Add(new Run(num + ". ") { Foreground = (Brush)R("Faint") });
-        var r = new Run(title) { Foreground = done ? (Brush)R("Faint") : now ? (Brush)R("Ink") : (Brush)R("Dim"), FontWeight = now || depth == 0 && !done ? FontWeights.SemiBold : FontWeights.Normal };
-        if (done) r.TextDecorations = TextDecorations.Strikethrough;
-        tb.Inlines.Add(r);
+        int before = tb.Inlines.Count;
+        Rich(tb, title, done ? (Brush)R("Faint") : now ? (Brush)R("Ink") : (Brush)R("Dim"), now || depth == 0 && !done);
+        if (done) foreach (var il in tb.Inlines.Skip(before).OfType<Run>()) il.TextDecorations = TextDecorations.Strikethrough;
         tb.Inlines.Add(new Run(done ? "  완료" : now ? "  진행 중" : "") { Foreground = done ? B("#A8E6B8") : (Brush)R("AccentBrush"), FontSize = 11 });
         sp.Children.Add(tb);
-        if (!string.IsNullOrEmpty(sum) && !done) sp.Children.Add(new TextBlock { Text = "└ " + sum, FontSize = 11.5, Foreground = (Brush)R("Dim"), TextWrapping = TextWrapping.Wrap, Margin = new Thickness(0, 3, 0, 0), LineHeight = 17 });
+        if (!string.IsNullOrEmpty(sum) && !done) { var sb2 = new TextBlock { FontSize = 11.5, Foreground = (Brush)R("Dim"), TextWrapping = TextWrapping.Wrap, Margin = new Thickness(0, 3, 0, 0), LineHeight = 17 }; Rich(sb2, "└ " + sum, now ? B("#E6C9A8") : (Brush)R("Dim")); sp.Children.Add(sb2); }
         return g;
+    }
+    // **굵게** 표시한 부분은 굵은 주황색으로, `코드`는 하늘색으로 보여 준다.
+    static readonly Brush HiBrush = B("#FFB37A"), CodeBrush = B("#8FD3FF");
+    void Rich(TextBlock tb, string s, Brush normal, bool bold = false) {
+        foreach (Match m in Regex.Matches(s ?? "", @"\*\*(.+?)\*\*|`([^`]+)`|[^*`]+|[*`]")) {
+            if (m.Groups[1].Success) tb.Inlines.Add(new Run(m.Groups[1].Value) { Foreground = HiBrush, FontWeight = FontWeights.Bold });
+            else if (m.Groups[2].Success) tb.Inlines.Add(new Run(m.Groups[2].Value) { Foreground = CodeBrush, FontWeight = FontWeights.SemiBold });
+            else tb.Inlines.Add(new Run(m.Value) { Foreground = normal, FontWeight = bold ? FontWeights.SemiBold : FontWeights.Normal });
+        }
     }
 
     // ---------- 울트라코드 ----------
@@ -2283,7 +2310,7 @@ class Launcher {
             { "prompt_cache", new { caching_observed = true, hit_ratio = 0.97, warm = true, expires_at = nowS + 59 * 60, misses = 0 } } }));
         if (Environment.GetCommandLineArgs().Contains("--busy")) File.WriteAllText(StatusPath(t.Key + "-busy"), "1");
         Directory.CreateDirectory(System.IO.Path.Combine(BaseDir, "plans"));
-        File.WriteAllText(System.IO.Path.Combine(BaseDir, "plans", "demo-session.md"), "요구: 런처 오른쪽 패널에 에이전트·팀 구성·플랜 분류를 넣고, Ultracode가 켜지면 터미널 테두리를 무지개빛으로 빛나게 한다.\n1. [완료] 모드가 팀 정보 내보내기\n2. [진행] 런처 화면 만들기 — 팀 구성 도트 캐릭터를 그리는 중\n   2.1 [완료] 분류 탭\n   2.2 [진행] 팀 구성\n   2.3 [대기] 플랜\n3. [대기] 실제 세션에서 확인\n", new UTF8Encoding(false));
+        File.WriteAllText(System.IO.Path.Combine(BaseDir, "plans", "demo-session.md"), "요구: 런처 오른쪽 패널 개선\n  - 패널에 **에이전트·팀 구성·플랜** 분류 넣기\n  - **Ultracode**가 켜지면 터미널 테두리를 무지개빛으로\n  - 플랜은 `plans/세션.md`에서 읽기\n1. [완료] 모드가 팀 정보 내보내기\n2. [진행] 런처 화면 만들기 — 팀 구성 도트 캐릭터를 그리는 중\n   2.1 [완료] 분류 탭\n   2.2 [진행] 팀 구성\n   2.3 [대기] 플랜\n3. [대기] 실제 세션에서 확인\n", new UTF8Encoding(false));
         t.Ultra = true;
         File.WriteAllText(StatusPath(t.Key + "-pane.json"), json.Serialize(new {
             model = "claude-opus-5-5", ultracode = true, session = "demo-session",
