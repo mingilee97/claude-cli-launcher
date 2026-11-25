@@ -2501,7 +2501,9 @@ static class PendingMove {
                     Directory.CreateDirectory(to);
                     // 기록 안의 작업 폴더(cwd)를 새 폴더로 바꾼다. 정확히 그 폴더인 것만 바꾸고 하위 폴더는 건드리지 않는다.
                     string oldJ = "\"cwd\":\"" + oldCwd.Replace("\\", "\\\\") + "\"", newJ = "\"cwd\":\"" + newCwd.Replace("\\", "\\\\") + "\"";
-                    string text = File.ReadAllText(src, Encoding.UTF8).Replace(oldJ, newJ);
+                    // 그 폴더 아래 하위 폴더(예: build)에서 쓴 줄도 새 경로로 바꾼다.
+                    string oldSub = "\"cwd\":\"" + oldCwd.Replace("\\", "\\\\") + "\\\\", newSub = "\"cwd\":\"" + newCwd.Replace("\\", "\\\\") + "\\\\";
+                    string text = File.ReadAllText(src, Encoding.UTF8).Replace(oldJ, newJ).Replace(oldSub, newSub);
                     File.WriteAllText(dst, text, new UTF8Encoding(false));
                     string srcDir = Path.Combine(from, id), dstDir = Path.Combine(to, id);
                     if (Directory.Exists(srcDir) && !Directory.Exists(dstDir)) Directory.Move(srcDir, dstDir);
