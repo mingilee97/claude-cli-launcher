@@ -154,6 +154,8 @@ static class Scanner {
         try {
             Directory.CreateDirectory(Path.GetDirectoryName(CacheFile));
             var js = new JavaScriptSerializer { MaxJsonLength = int.MaxValue };
+            // 지워진 세션 파일의 항목은 캐시에서도 지운다(첫 질문 사본이 남지 않게).
+            foreach (var k in cache.Keys.Where(x => !File.Exists(x)).ToList()) cache.Remove(k);
             File.WriteAllText(CacheFile + ".tmp", js.Serialize(cache.Values.ToList()), Encoding.UTF8);
             if (File.Exists(CacheFile)) File.Delete(CacheFile);
             File.Move(CacheFile + ".tmp", CacheFile);
@@ -560,7 +562,7 @@ class Launcher {
         ((MenuItem)cm.Items[0]).Click += delegate { OpenSelected(); };
         ((MenuItem)cm.Items[1]).Click += delegate { var x = CurSess(); if (x != null && Directory.Exists(x.Cwd)) Process.Start("explorer.exe", "\"" + x.Cwd + "\""); };
         ((MenuItem)cm.Items[2]).Click += delegate { var x = CurSess(); if (x != null) { Clipboard.SetText(x.Id); status.Text = "세션 ID를 복사했습니다."; } };
-        ((MenuItem)cm.Items[3]).Click += delegate { var x = CurSess(); if (x != null) LaunchExternal(x.Cwd, "--resume " + x.Id, x.Title); };
+        ((MenuItem)cm.Items[3]).Click += delegate { var x = CurSess(); if (x != null && SafeId(x.Id)) LaunchExternal(x.Cwd, "--resume " + x.Id, x.Title); };
 
         w.PreviewKeyDown += (s, e) => {
             if (web != null && web.IsKeyboardFocusWithin) return;   // 터미널 입력은 그대로 터미널로
@@ -803,7 +805,15 @@ class Launcher {
             cw.Settings.IsZoomControlEnabled = false;
             cw.Settings.AreBrowserAcceleratorKeysEnabled = false;
             cw.Settings.IsStatusBarEnabled = false;
-            cw.PermissionRequested += (s, e) => { if (e.PermissionKind == CoreWebView2PermissionKind.ClipboardRead) e.State = CoreWebView2PermissionState.Allow; };
+            // 내장 터미널 화면(launcher.local) 말고는 아무 데도 가지 못하게 막는다. 끌어다 놓은 링크·파일, 터미널 속 링크도 마찬가지.
+            web.AllowExternalDrop = false;
+            cw.NavigationStarting += (s, e) => { if (!IsTermUri(e.Uri)) e.Cancel = true; };
+            cw.FrameNavigationStarting += (s, e) => { if (!IsTermUri(e.Uri)) e.Cancel = true; };
+            cw.NewWindowRequested += (s, e) => {
+                e.Handled = true; // 주소창 없는 팝업 대신, http(s) 링크만 기본 브라우저로 연다(주소가 보이게).
+                Uri u; if (Uri.TryCreate(e.Uri, UriKind.Absolute, out u) && (u.Scheme == "https" || u.Scheme == "http")) try { Process.Start(new ProcessStartInfo(u.AbsoluteUri) { UseShellExecute = true }); } catch { }
+            };
+            cw.PermissionRequested += (s, e) => { e.State = e.PermissionKind == CoreWebView2PermissionKind.ClipboardRead && IsTermUri(e.Uri) ? CoreWebView2PermissionState.Allow : CoreWebView2PermissionState.Deny; };
             cw.SetVirtualHostNameToFolderMapping("launcher.local", System.IO.Path.Combine(baseDir, "web"), CoreWebView2HostResourceAccessKind.Allow);
             cw.WebMessageReceived += OnWebMessage;
             cw.Navigate("https://launcher.local/term.html");
@@ -818,7 +828,9 @@ class Launcher {
         else queue.Add(s);
     }
 
+    static bool IsTermUri(string uri) { return uri != null && uri.StartsWith("https://launcher.local/", StringComparison.OrdinalIgnoreCase); }
     void OnWebMessage(object sender, CoreWebView2WebMessageReceivedEventArgs e) {
+        if (!IsTermUri(e.Source)) return; // 터미널 화면이 보낸 메시지만 받는다.
         Dictionary<string, object> m;
         try { m = json.DeserializeObject(e.WebMessageAsJson) as Dictionary<string, object>; } catch { return; }
         if (m == null || !m.ContainsKey("t")) return;
@@ -1011,19 +1023,23 @@ class Launcher {
     string InnerArgs(string resumeId, string newId) { return InnerArgs(resumeId, newId, launchModel, launchEffort); }
     string InnerArgs(string resumeId, string newId, string model, string effort) {
         var sb = new StringBuilder("--settings '" + System.IO.Path.Combine(BaseDir, "launcher-settings.json") + "'");
-        if (model != null) sb.Append(" --model '" + model.Replace("'", "") + "'");
+        // 명령 줄에 들어가는 값은 허용한 글자만 남긴다(따옴표·세미콜론 등으로 명령을 끼워 넣지 못하게).
+        if (model != null) { string md = Regex.Replace(model, @"[^A-Za-z0-9._\-\[\]]", ""); if (md.Length > 0) sb.Append(" --model " + md); }
         if (effort != null) sb.Append(" --effort " + Regex.Replace(effort, "[^a-z]", ""));
-        if (resumeId != null) sb.Append(" --resume " + resumeId);
-        else if (newId != null) sb.Append(" --session-id " + newId);
+        if (resumeId != null && SafeId(resumeId)) sb.Append(" --resume " + resumeId);
+        else if (newId != null && SafeId(newId)) sb.Append(" --session-id " + newId);
         return sb.ToString();
     }
 
+    static bool SafeId(string id) { return id != null && Regex.IsMatch(id, "^[A-Za-z0-9-]{1,64}$"); }
     void LaunchExternal(string dir, string claudeArgs, string title) {
         LaunchExternalCmd((dir ?? "").TrimEnd('\\'), PsCmd(claudeArgs), title);
     }
     void LaunchExternalCmd(string dir, string cmd, string title) {
         if (!Directory.Exists(dir)) return;
-        string t = Regex.Replace(title ?? "Claude", "[\";]", " ");
+        // wt는 ; 를 명령 구분자로 쓰고, cmd는 & | 등을 명령으로 읽는다. 그런 글자가 든 폴더는 바깥 창으로 열지 않는다.
+        if (Regex.IsMatch(dir, "[\";&|^<>%]")) { status.Text = "폴더 이름에 특수 문자가 있어 바깥 창으로 열지 않습니다. 내장 터미널로 여세요."; return; }
+        string t = Regex.Replace(title ?? "Claude", "[\";&|^<>%]", " ");
         if (t.Length > 40) t = t.Substring(0, 40) + "…";
         Environment.SetEnvironmentVariable("CLAUDE_LAUNCHER", null);
         try { Process.Start(new ProcessStartInfo("wt.exe", "-w ClaudeLauncher new-tab --title \"" + t + "\" -d \"" + dir + "\" " + cmd) { UseShellExecute = true }); }
@@ -1744,9 +1760,11 @@ class Launcher {
             File.WriteAllText(CompactFile, json.Serialize(new Dictionary<string, object> { { "window", win }, { "items", items }, { "custom", custom }, { "instructions", BuildCompactNote(items, custom) } }), new UTF8Encoding(false));
             string s = File.ReadAllText(UserSettings);
             string ns = Regex.IsMatch(s, "\"autoCompactWindow\"\\s*:\\s*\\d+")
-                ? Regex.Replace(s, "(\"autoCompactWindow\"\\s*:\\s*)\\d+", "1" + win)
+                ? Regex.Replace(s, "(\"autoCompactWindow\"\\s*:\\s*)\\d+", "${1}" + win)
                 : Regex.Replace(s, "^\\s*\\{", "{\n  \"autoCompactWindow\": " + win + ",");
-            if (ns != s) { File.Copy(UserSettings, UserSettings + ".bak-launcher", true); File.WriteAllText(UserSettings, ns, new UTF8Encoding(false)); }
+            // 바꾼 뒤에도 키가 그대로 있는지 확인하고, 백업은 처음 한 번만 만든다(깨진 파일이 성한 백업을 덮지 않게).
+            if (ns != s && !Regex.IsMatch(ns, "\"autoCompactWindow\"\\s*:\\s*" + win + "\\b")) throw new Exception("설정 파일을 안전하게 고치지 못했습니다");
+            if (ns != s) { if (!File.Exists(UserSettings + ".bak-launcher")) File.Copy(UserSettings, UserSettings + ".bak-launcher"); File.WriteAllText(UserSettings, ns, new UTF8Encoding(false)); }
             compactWindow = win; compactItems = items; compactCustom = custom;
             UpdateCompactChip();
             return true;
