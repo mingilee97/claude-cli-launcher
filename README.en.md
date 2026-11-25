@@ -6,6 +6,10 @@ A Windows app that groups your [Claude Code](https://claude.com/claude-code) ses
 
 > Unofficial. Not made or endorsed by Anthropic. Windows only. The UI is in Korean.
 
+![Teaser: folder tree, session tabs grouped by folder, agent team view](docs/teaser.gif)
+
+<sub>Projects and sessions shown are fake demo data. [Full-quality video (MP4)](docs/teaser.mp4)</sub>
+
 ![Session list](docs/screenshot-list.png)
 
 Once you've used Claude Code for a while you end up with dozens of sessions, and finding "that one conversation" again means scrolling through `claude --resume`. This launcher lists sessions per project folder, with search, so you can pick one and continue right away.
